@@ -1,6 +1,5 @@
 # Gunakan image Python dasar yang sudah termasuk OS
-FROM python:3.12-full
-
+FROM python:3.12
 # Pasang system dependencies yang dibutuhkan OpenCV
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
