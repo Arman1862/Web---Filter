@@ -7,6 +7,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
+# Inisialisasi MediaPipe Hands
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
@@ -15,11 +16,13 @@ hands = mp_hands.Hands(
     min_tracking_confidence=0.7
 )
 
+# Inisialisasi Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1)
 
 mp_draw = mp.solutions.drawing_utils
 
+# URL gambar untuk masking wajah
 IMAGE_URL = "https://i.pinimg.com/1200x/43/8b/c6/438bc647f7f36f1115ad28cd5ee8c059.jpg"
 
 try:

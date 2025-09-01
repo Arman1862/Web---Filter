@@ -1,4 +1,3 @@
-const videoInput = document.getElementById('webcam-input');
 const filteredOutput = document.getElementById('filtered-output');
 const startButton = document.getElementById('start-button');
 const stopButton = document.getElementById('stop-button');
