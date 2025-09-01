@@ -1,19 +1,12 @@
-from flask import Flask, render_template
-from flask_socketio import SocketIO, emit
+from flask import Flask, Response, render_template
 import cv2
 import mediapipe as mp
 import numpy as np
 import requests
-import base64
-import threading
-import time
+from io import BytesIO
 
-# Inisialisasi aplikasi Flask dan SocketIO
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'rahasia'
-socketio = SocketIO(app)
 
-# Inisialisasi MediaPipe dan library lainnya
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
@@ -21,11 +14,14 @@ hands = mp_hands.Hands(
     min_detection_confidence=0.7,
     min_tracking_confidence=0.7
 )
+
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1)
+
 mp_draw = mp.solutions.drawing_utils
 
 IMAGE_URL = "https://i.pinimg.com/1200x/43/8b/c6/438bc647f7f36f1115ad28cd5ee8c059.jpg"
+
 try:
     response = requests.get(IMAGE_URL)
     img_data = response.content
@@ -36,97 +32,72 @@ except Exception as e:
     print(f"Gagal mengunduh gambar dari URL: {e}")
     overlay_img = None
 
-camera_running = False
-camera_thread = None
-
-# Fungsi untuk memproses video dan mengirimkannya ke frontend
-def video_stream():
-    global camera_running
-    cap = cv2.VideoCapture(0)
-    
-    # Menurunkan resolusi agar lebih cepat
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
+def generate_frames():
+    cap = cv2.VideoCapture(0)  
     if not cap.isOpened():
         print("Error: Kamera tidak dapat dibuka.")
         return
 
-    while camera_running:
+    while True:
         success, img_cam = cap.read()
         if not success:
             break
+        else:
+            img_cam = cv2.resize(img_cam, (1280, 720))
+            img_cam = cv2.flip(img_cam, 1)
+            
+            img_for_detection = img_cam.copy()
+            imgRGB = cv2.cvtColor(img_for_detection, cv2.COLOR_BGR2RGB)
+            
+            hand_results = hands.process(imgRGB)
+            face_results = face_mesh.process(imgRGB)
 
-        img_cam = cv2.flip(img_cam, 1)
-        imgRGB = cv2.cvtColor(img_cam, cv2.COLOR_BGR2RGB)
-        
-        hand_results = hands.process(imgRGB)
-        face_results = face_mesh.process(imgRGB)
-
-        if face_results.multi_face_landmarks and overlay_img is not None:
-            for face_landmarks in face_results.multi_face_landmarks:
-                h, w, _ = img_cam.shape
-                face_oval_indices = set()
-                for connection in mp_face_mesh.FACEMESH_FACE_OVAL:
-                    face_oval_indices.add(connection[0])
-                    face_oval_indices.add(connection[1])
-                
-                face_oval_points = [
-                    (int(face_landmarks.landmark[p].x * w), int(face_landmarks.landmark[p].y * h))
-                    for p in face_oval_indices
-                ]
-                
-                mask = np.zeros_like(img_cam, dtype=np.uint8)
-                if face_oval_points:
-                    hull = cv2.convexHull(np.array(face_oval_points, dtype=np.int32))
-                    cv2.fillConvexPoly(mask, hull, (255, 255, 255))
-                
-                (x, y, w_mask, h_mask) = cv2.boundingRect(mask[:, :, 0])
-                
-                if w_mask > 0 and h_mask > 0:
-                    resized_overlay = cv2.resize(overlay_img, (w_mask, h_mask))
-                    face_region = img_cam[y:y+h_mask, x:x+w_mask]
-                    mask_region = mask[y:y+h_mask, x:x+w_mask]
+            if face_results.multi_face_landmarks and overlay_img is not None:
+                for face_landmarks in face_results.multi_face_landmarks:
+                    h, w, _ = img_for_detection.shape
+                    face_oval_indices = set()
+                    for connection in mp_face_mesh.FACEMESH_FACE_OVAL:
+                        face_oval_indices.add(connection[0])
+                        face_oval_indices.add(connection[1])
                     
-                    masked_overlay = cv2.bitwise_and(resized_overlay, mask_region)
-                    face_region_masked = cv2.bitwise_and(face_region, cv2.bitwise_not(mask_region))
-                    img_cam[y:y+h_mask, x:x+w_mask] = cv2.add(face_region_masked, masked_overlay)
-        
-        if hand_results.multi_hand_landmarks:
-            for hand_landmarks in hand_results.multi_hand_landmarks:
-                mp_draw.draw_landmarks(img_cam, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-        
-        # Mengubah frame menjadi string base64 untuk dikirim via WebSocket
-        ret, buffer = cv2.imencode('.jpg', img_cam)
-        frame_bytes = buffer.tobytes()
-        encoded_frame = base64.b64encode(frame_bytes).decode('utf-8')
-        
-        # Kirim frame ke frontend
-        socketio.emit('video_frame', {'image': encoded_frame})
-        time.sleep(0.01) # Agar tidak terlalu membebani CPU
-    
-    cap.release()
+                    face_oval_points = [
+                        (int(face_landmarks.landmark[p].x * w), int(face_landmarks.landmark[p].y * h))
+                        for p in face_oval_indices
+                    ]
+                    
+                    mask = np.zeros_like(img_for_detection, dtype=np.uint8)
+                    if face_oval_points:
+                        hull = cv2.convexHull(np.array(face_oval_points, dtype=np.int32))
+                        cv2.fillConvexPoly(mask, hull, (255, 255, 255))
+                    
+                    (x, y, w_mask, h_mask) = cv2.boundingRect(mask[:, :, 0])
+                    
+                    if w_mask > 0 and h_mask > 0:
+                        resized_overlay = cv2.resize(overlay_img, (w_mask, h_mask))
+                        face_region = img_for_detection[y:y+h_mask, x:x+w_mask]
+                        mask_region = mask[y:y+h_mask, x:x+w_mask]
+                        
+                        masked_overlay = cv2.bitwise_and(resized_overlay, mask_region)
+                        face_region_masked = cv2.bitwise_and(face_region, cv2.bitwise_not(mask_region))
+                        img_for_detection[y:y+h_mask, x:x+w_mask] = cv2.add(face_region_masked, masked_overlay)
+            
+            if hand_results.multi_hand_landmarks:
+                for hand_landmarks in hand_results.multi_hand_landmarks:
+                    mp_draw.draw_landmarks(img_for_detection, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            
+            ret, buffer = cv2.imencode('.jpg', img_for_detection)
+            frame = buffer.tobytes()
+
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# Handler saat client meminta untuk memulai streaming
-@socketio.on('start_stream')
-def handle_start_stream():
-    global camera_running, camera_thread
-    if not camera_running:
-        camera_running = True
-        camera_thread = threading.Thread(target=video_stream)
-        camera_thread.start()
-        print("Streaming dimulai!")
-
-# Handler saat client meminta untuk menghentikan streaming
-@socketio.on('stop_stream')
-def handle_stop_stream():
-    global camera_running
-    camera_running = False
-    print("Streaming dihentikan!")
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True)
+    app.run(debug=True)
