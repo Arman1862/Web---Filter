@@ -1,42 +1,36 @@
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, request, jsonify, redirect, url_for
 import cv2
 import mediapipe as mp
 import numpy as np
 import requests
 from io import BytesIO
+import os
 
 app = Flask(__name__)
-
-# Inisialisasi MediaPipe Hands
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.7
-)
 
 # Inisialisasi Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1)
-
 mp_draw = mp.solutions.drawing_utils
 
-# URL gambar untuk masking wajah
-IMAGE_URL = "https://i.pinimg.com/1200x/43/8b/c6/438bc647f7f36f1115ad28cd5ee8c059.jpg"
+# URL gambar default untuk masking wajah
+DEFAULT_IMAGE_URL = "https://i.pinimg.com/1200x/43/8b/c6/438bc647f7f36f1115ad28cd5ee8c059.jpg"
 
+# Variabel global untuk menyimpan gambar filter
+overlay_img = None
+# Inisialisasi gambar awal saat aplikasi pertama kali dijalankan
 try:
-    response = requests.get(IMAGE_URL)
+    response = requests.get(DEFAULT_IMAGE_URL)
     img_data = response.content
     img_array = np.frombuffer(img_data, np.uint8)
     overlay_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    print("Gambar berhasil diunduh!")
+    print("Gambar default berhasil diunduh!")
 except Exception as e:
-    print(f"Gagal mengunduh gambar dari URL: {e}")
+    print(f"Gagal mengunduh gambar default dari URL: {e}")
     overlay_img = None
 
 def generate_frames():
-    cap = cv2.VideoCapture(0)  
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Kamera tidak dapat dibuka.")
         return
@@ -52,8 +46,10 @@ def generate_frames():
             img_for_detection = img_cam.copy()
             imgRGB = cv2.cvtColor(img_for_detection, cv2.COLOR_BGR2RGB)
             
-            hand_results = hands.process(imgRGB)
             face_results = face_mesh.process(imgRGB)
+            
+            # Akses variabel global
+            global overlay_img 
 
             if face_results.multi_face_landmarks and overlay_img is not None:
                 for face_landmarks in face_results.multi_face_landmarks:
@@ -84,10 +80,6 @@ def generate_frames():
                         face_region_masked = cv2.bitwise_and(face_region, cv2.bitwise_not(mask_region))
                         img_for_detection[y:y+h_mask, x:x+w_mask] = cv2.add(face_region_masked, masked_overlay)
             
-            if hand_results.multi_hand_landmarks:
-                for hand_landmarks in hand_results.multi_hand_landmarks:
-                    mp_draw.draw_landmarks(img_for_detection, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            
             ret, buffer = cv2.imencode('.jpg', img_for_detection)
             frame = buffer.tobytes()
 
@@ -101,6 +93,41 @@ def index():
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/upload_filter', methods=['POST'])
+def upload_filter():
+    global overlay_img
+    
+    # Cek apakah ada file yang diunggah
+    if 'file' in request.files and request.files['file'].filename != '':
+        file = request.files['file']
+        img_data = file.read()
+        img_array = np.frombuffer(img_data, np.uint8)
+        new_overlay_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if new_overlay_img is not None:
+            overlay_img = new_overlay_img
+            print("Filter berhasil diganti dengan foto yang diunggah.")
+            return redirect(url_for('index'))
+    
+    # Cek apakah ada URL yang dikirim
+    url = request.form.get('url')
+    if url:
+        try:
+            response = requests.get(url)
+            img_data = response.content
+            img_array = np.frombuffer(img_data, np.uint8)
+            new_overlay_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if new_overlay_img is not None:
+                overlay_img = new_overlay_img
+                print("Filter berhasil diganti dengan foto dari URL.")
+                return redirect(url_for('index'))
+            else:
+                print("URL tidak valid atau bukan gambar.")
+        except Exception as e:
+            print(f"Gagal mengunduh gambar dari URL: {e}")
+            
+    # Jika tidak ada file atau URL yang valid, kembalikan ke halaman utama
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     app.run(debug=True)
