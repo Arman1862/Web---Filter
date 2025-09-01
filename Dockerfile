@@ -1,5 +1,5 @@
 # Gunakan image Python dasar yang sudah termasuk OS
-FROM python:3.12-slim
+FROM python:3.12-full
 
 # Pasang system dependencies yang dibutuhkan OpenCV
 RUN apt-get update && apt-get install -y \
